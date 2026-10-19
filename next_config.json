@@ -1,0 +1,10 @@
+{
+  "_comment": "取樣預設由 Strata 負責：setup 會依模型家族把 Qwen 官方值（temperature 1.0 / top_p 0.95 / top_k 20，已對照 Qwen3.8-Flash-Next 的 generation_config）寫進 strata-*.json，請求沒帶的欄位才補，請求自帶的值優先。所以這裡預設全部 null（閘道不改任何請求）。只有用 format_probe.py 實測證明需要時，才在這裡填值或設定 temperature_cap。",
+  "model_id": "Qwen3.8-Flash-Next",
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null
+  },
+  "temperature_cap": null
+}

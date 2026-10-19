@@ -1,0 +1,8 @@
+# Created on the target machine by START.bat; never commit (the model alone is ~130 GB)
+strata-nvfp4/
+strata-nvfp4.*/
+Strata-data/
+portable_state/
+pyenv/
+__pycache__/
+*.pyc

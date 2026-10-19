@@ -1,0 +1,141 @@
+# Qwen3.8-Flash-Next 可攜接口（Strata NVFP4）
+
+在單張 12 GB 以上的 NVIDIA RTX 顯卡加 64 GB RAM 的 Windows 電腦上，一鍵部署 Qwen3.8-Flash-Next（125B MoE，NVFP4 專家），並提供 OpenAI／Anthropic 相容 API。推理引擎是 [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)，本專案負責可攜封裝、啟動流程與 API 入口。
+
+**一鍵啟動：缺什麼自動下載什麼，全部都在就直接離線啟動。** 所有東西都裝在這個資料夾裡，唯一無法可攜的是 NVIDIA 驅動。本儲存庫只有啟動腳本（約 50 KB），模型與引擎在第一次啟動時才下載。
+
+| 元件 | 位置 |
+|---|---|
+| 一鍵啟動器 | `START.bat` → `start_next.ps1` |
+| 推理引擎與模型 API | Strata（`strata-nvfp4\`，只聽 `127.0.0.1:8080`） |
+| 區網入口 | `next_gateway.py`（`0.0.0.0:8000`，金鑰檢查，請求原樣轉發） |
+| 模型 | `Strata-data\`（約 130 GB，首次啟動自動下載） |
+| Python | `strata-nvfp4\.venv\Scripts\`（嵌入式 Python，首次啟動自動下載） |
+
+## 一鍵啟動
+
+把整個資料夾放到要跑模型的電腦上，**建議放在純英文路徑**（例如 `D:\QwenNext`，原生引擎常不支援中文路徑），然後雙擊：
+
+```text
+START.bat
+```
+
+每次啟動都依序檢查，只補缺少的部分：
+
+| 步驟 | 已存在 | 不存在 |
+|---|---|---|
+| 1. Strata 原始碼 `strata-nvfp4\` | 略過 | 有 git 就 clone，沒有就下載 zip（釘在 `v0.1.44.1-nvfp4.2`） |
+| 2. 可攜 Python `strata-nvfp4\.venv\Scripts\` | 略過 | 下載 python.org 嵌入式 3.12.10 與 pip（不需安裝、不寫登錄檔） |
+| 3. 引擎＋模型 `Strata-data\` | 略過（看 `portable_state\installed.json`） | 交給 Strata 自己的下載器（約 130 GB，中斷後再按一次 START.bat 會續傳） |
+| 4. 啟動 | Strata（`127.0.0.1:8080`）＋閘道（`0.0.0.0:8000`） | |
+
+- **搬移：** 裝好之後可以整個資料夾搬到別的磁碟或別台電腦。下次啟動時會偵測位置改變，自動改寫 Strata 設定檔裡的絕對路徑。
+- **改參數：** 換模型家族、context 或 vision 時，會自動重跑 Strata 安裝，已下載的檔案會保留。換金鑰不需要重跑安裝。
+- **崩潰：** Strata 或閘道任一方結束，另一方會一起停掉，視窗會停住讓你看到錯誤。
+
+需求：Windows 10/11 原生（不支援 WSL2）、NVIDIA RTX 20–50 系 12 GB 以上、驅動 580 以上、RAM 64 GB 以上、硬碟約 150 GB（NVMe）、固定 65536 MB 的分頁檔（需要管理員權限，腳本只會提醒、不會改）。
+
+參數都加在 `START.bat` 後面（各項預設值見下一節「模型設定」）：
+
+```powershell
+.\START.bat -ClientKey mykey                          # 建議：區網連線需要金鑰
+.\START.bat -Family qwen-nvfp4-gptq -Context 65536    # 換模型家族／context（會自動補裝）
+.\START.bat -CheckOnly                                # 只檢查硬體與 Strata 的 --check（會下載約 30 MB 的原始碼與 Python，不下載模型）
+.\setup_next.ps1                                      # 只下載不啟動（例如先在網路快的地方下載）
+.\START.bat -Reinstall                                # 強制重跑安裝，並把舊的系統 venv 換成可攜 Python
+```
+
+載入模型需要數分鐘；`http://127.0.0.1:8000/health` 回 200 才代表可用，載入中回 503。
+
+- 端點：`/v1/chat/completions`、`/v1/messages`（Anthropic 格式）、`/v1/models`、`/health`。`/v1/responses` 取決於 Strata 是否提供，沒有驗證過。
+- 模型名稱隨意填，API Key 填 `-ClientKey` 的值（沒設就填 `local`）。
+- 閘道綁 `0.0.0.0:8000`，區網可連。**建議一定要設 `-ClientKey`。** Strata 本體只聽 `127.0.0.1:8080`。只想本機使用就加 `-HostAddress 127.0.0.1`。
+- 區網連不進來時，在可信任的網路上用系統管理員 PowerShell 開放 TCP 8000（先用 `Get-NetConnectionProfile` 確認網路設定檔是 Private）：
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "Qwen Next API 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+  ```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://<主機IP>:8000/v1", api_key="local")
+print(client.chat.completions.create(model="Qwen3.8-Flash-Next",
+      messages=[{"role": "user", "content": "請只回答 OK"}], max_tokens=2048).choices[0].message.content)
+```
+
+## 模型設定
+
+原則是**以 Strata 和 Qwen 官方設定為準，本包只補可攜與連線需要的部分**。
+
+| 項目 | 設定 | 來源與理由 |
+|---|---|---|
+| 模型家族 | `qwen-nvidia-nvfp4`（`-Family` 可改） | NVIDIA 的 NVFP4 檢查點，轉成 Strata 格式，約 127 GB，64 GB RAM 可跑。可改用 `qwen-nvfp4-gptq`（Strata 預設家族）。`qwen-nvfp4-mix` 與 `qwen-q8` 需要 128 GB RAM。 |
+| Context | 交給 Strata 依顯存決定（`-Context` 可指定） | Strata README：32 GB → 262144、24 GB → 131072、16 GB → 65536、12 GB → 32768。 |
+| 取樣預設 | Strata 依家族寫入 `temperature 1.0 / top_p 0.95 / top_k 20` | 已對照 Qwen3.8-Flash-Next 官方 `generation_config.json`，數值一致。只套用在請求沒帶的欄位，請求自帶的值優先。閘道預設不改任何取樣欄位。 |
+| `fit_max_tokens` | `true`（本包加的） | Strata 預設在 `max_tokens` 超過剩餘 context 時回 HTTP 400，代理類客戶端常送很大的值。開啟後會夾到剩餘空間，回應的 `finish_reason` 照常標示 `length`。 |
+| `host` | 固定 `127.0.0.1`（本包加的） | Strata 本體不對外，區網一律經閘道與金鑰。 |
+| `api_key` | `-UpstreamKey` 有設才寫入，沒設就移除 | 每次啟動重新套用，換金鑰不用重跑安裝。 |
+| 低 RAM 模式 | Strata 自動判斷 | 低於約 92 GiB RAM 時，部分專家從硬碟讀取。 |
+| Vision | `no`（`-Vision yes` 可開） | 省記憶體；需要讀圖再開。 |
+
+標「本包加的」項目，由 `portable\strata_config.py` 在每次啟動時寫入 `strata-*.json`。之所以每次都寫，是因為 Strata 重跑 setup 時會重寫它自己管理的欄位。
+
+## 嚴格格式輸出
+
+自架模型 API 常見的格式問題，多半出在 API 層，而不是溫度：
+
+- 沒處理結構化輸出欄位。
+- 對話模板與模型官方模板不一致。
+- `max_tokens` 被默默壓低，導致截斷。
+
+本包的做法：
+
+- **結構化輸出交給引擎。** `response_format`（含 `json_schema`）、`stop`、`seed`、`logit_bias`、`min_p`、penalties 等欄位一律原樣轉發。Strata 的 `serve/` 內建結構化輸出模組（`structured.py`）。
+- **對話模板由 Strata 處理。** 沿用 Qwen 官方 `chat_template.jinja` 的 reasoning 句子，閘道不自行組提示詞。
+- **取樣用官方值。** 由 Strata 依家族補上，閘道不改動客戶端送來的任何值（`next_config.json` 全部是 `null`）。
+- **不截斷。** `max_tokens` 只在超過剩餘 context 時才被夾住（`fit_max_tokens`），沒有固定上限。
+
+**格式不穩時，不要憑感覺調低溫度，先實測。** 在模型載入後執行：
+
+```powershell
+python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
+```
+
+它會對「純 JSON」「json_schema 結構化輸出」「只回 OK」「固定三行」「工具呼叫」五種格式各跑幾次，印出各溫度的通過率與失敗原因（例如 `finish_reason=length` 代表是被截斷，不是格式問題）。如果低溫明顯較好，才在 `next_config.json` 填 `sampling.temperature`（只影響沒帶溫度的請求），或啟動時加 `-TemperatureCap 0.6`（連客戶端明確送來的高溫也壓下來）。
+
+## 與網路上流傳的部署教學的差異
+
+有篇流傳的中文教學推薦「NVIDIA ModelOpt NVFP4 + strata-nvfp4」方案。Qwen3.8-Flash-Next 與 `sergqwer/strata-nvfp4` 都是真的，但教學裡的指令不是：`python -m strata.serve`、`--adapt-async` 作為獨立指令、`--offload-device cpu`、`--gpu-memory-utilization`、`STRATA_PIN_BY_NEED`、`pip install -r requirements.txt` 在 Strata 的 README 與 setup.py 裡都查不到。實際流程是 `START-HERE.bat`（setup.py）→ `serve/server.py --engine strata --config …`，本包照這個做。另外「近乎無損」沒有找到佐證：Strata README 只給了 GPTQ 版對 Q8_0 的 top-token 一致率 93.6%（RTX 5090 / 128 GB 實測），NVIDIA 版沒有對應數字。要比較請改用 `-Family qwen-nvfp4-gptq` 並用 `format_probe.py` 自行測。16 GB 顯卡配 64 GB RAM 會走 low-RAM 模式（從硬碟讀部分專家），速度請以實測為準，教學裡的 40–55 tok/s 沒有出處。
+
+## 可攜 Python 的做法
+
+Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直接拿來跑 `setup.py`。`setup.py` 只用 `sys.executable -m pip install` 裝套件，不檢查是否為 venv。所以本包把**嵌入式 Python** 放在那個位置，Strata 的流程完全不變，但不需要 winget，也不需要系統 Python。
+
+嵌入式 Python 的 `._pth` 會讓腳本找不到同資料夾的模組。這點已用本機實測確認：不處理的話 `tools\*.py`、`serve\server.py` 會出現 `ModuleNotFoundError`。`portable\sitecustomize.py` 會補回這個行為，補上後實測三種腳本都正常。
+
+## 已驗證與未驗證
+
+**已在沒有 GPU 的 Windows 11 上用假 Strata 測過**（假 setup.py、假 server.py、用系統 Python 模擬可攜 Python）：
+
+- 首次安裝、第二次跳過。改家族／context 會重跑 setup；換金鑰不會重跑，但會寫入設定檔。
+- 沒指定 context 時不傳 `--context`；setup 實際寫出的設定檔名會記錄下來，不靠檔名猜。
+- 設定檔的 `host`、`fit_max_tokens`、`api_key` 會被套用，Strata 自己的 `sampling` 不被動到。
+- 啟動後經閘道打到 Strata，請求內容原封不動（含 `response_format`、超大 `max_tokens`），client key 檢查正常。
+- Strata 崩潰時連帶關閉並回傳錯誤碼，結束後不殘留程序。
+- 搬到含空白與中文的路徑後，自動改寫設定檔的絕對路徑（不分大小寫）。
+- `next_gateway.py`：預設原樣轉發、選用的補值與溫度上限、SSE 逐段轉發、上游不通回 502。
+- `format_probe.py` 的判定邏輯。
+
+**未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
+
+- 真正的 Strata `setup.py --family … --no-start --yes …` 安裝流程與模型下載；參數名稱是對照 setup.py 的選項清單寫的。
+- python.org 嵌入式 zip 加 get-pip 的實際下載與安裝。這是常見做法，但本次沒有實際下載測試。
+- 用 zip（而非 git）取得原始碼時，Strata 選引擎版本的方式是否依賴 git 資訊。有裝 git 的電腦會走 git clone，不受影響。
+
+## 疑難排解
+
+- **回覆全是 `!`**：Strata README 有專門章節，通常與 RAM／分頁檔或驅動有關，請依該章節處理。
+- **啟動很久沒回應**：首次載入與 low-RAM 模式都慢，看 Strata 視窗輸出；`/health` 503 屬正常。
+- **下載中斷**：再按一次 `START.bat`，已完成的步驟會略過，模型會續傳。
+- **更新 Strata**：如果原始碼是用 git clone 取得的，跑 `strata-nvfp4\UPDATE.bat` 即可，模型會保留。如果是 zip 取得的（沒有 `.git`），把 `strata-nvfp4\` 改名（例如 `strata-nvfp4.old`），再用 `.\START.bat -Tag <新版本標籤>` 啟動。這樣只會重新下載原始碼、Python 與引擎（約 0.5 GB），模型在 `Strata-data\` 裡會保留。
+- **Linux**：Strata 支援 Linux（`./setup.sh`），但本包的啟動器只寫了 Windows 版。

@@ -1,0 +1,30 @@
+Qwen3.8-Flash-Next portable bundle (Strata NVFP4)
+=================================================
+
+Double-click START.bat. Each start checks and downloads only what is missing:
+
+  1. Strata source        -> strata-nvfp4\                 (git clone, or the source zip)
+  2. Portable Python      -> strata-nvfp4\.venv\Scripts\   (python.org embeddable 3.12.10 + pip;
+                                                             no installer, no registry, relocatable)
+  3. Engine + model       -> strata-nvfp4\engine\, Strata-data\   (~130 GB, resumable)
+  4. Strata on 127.0.0.1:8080, gateway on 0.0.0.0:8000
+
+When everything is present it starts directly without network access. The
+whole folder can be moved or copied to another drive or PC after install;
+paths in Strata's configs are rewritten on the next start.
+
+Shipped files (small):
+
+  START.bat                 one click: install what is missing, then start
+  start_next.ps1            the logic behind START.bat (all options live here)
+  setup_next.ps1            download everything without starting
+  next_gateway.py           OpenAI/Anthropic-compatible front door
+  next_config.json          optional gateway sampling overrides (all null: Strata's official defaults apply)
+  format_probe.py           measures strict-format compliance per temperature
+  portable\sitecustomize.py makes embedded Python behave like a normal one for Strata's scripts
+  portable\strata_config.py applies host/fit_max_tokens/api_key and moved-folder paths to strata-*.json
+  README.md                 usage, design notes, verified vs unverified
+
+Only the NVIDIA driver (580+) cannot be portable. Target machine: Windows 10/11
+(native, not WSL2), RTX 20-50 with 12 GB+ VRAM, 64 GB+ RAM, ~150 GB free on NVMe,
+fixed 65536 MB page file. Prefer an ASCII-only folder path such as D:\QwenNext.
