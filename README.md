@@ -139,3 +139,11 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 - **下載中斷**：再按一次 `START.bat`，已完成的步驟會略過，模型會續傳。
 - **更新 Strata**：如果原始碼是用 git clone 取得的，跑 `strata-nvfp4\UPDATE.bat` 即可，模型會保留。如果是 zip 取得的（沒有 `.git`），把 `strata-nvfp4\` 改名（例如 `strata-nvfp4.old`），再用 `.\START.bat -Tag <新版本標籤>` 啟動。這樣只會重新下載原始碼、Python 與引擎（約 0.5 GB），模型在 `Strata-data\` 裡會保留。
 - **Linux**：Strata 支援 Linux（`./setup.sh`），但本包的啟動器只寫了 Windows 版。
+
+## 授權
+
+本儲存庫的腳本以 [MIT 授權](LICENSE)釋出。首次啟動時下載的元件**不在此授權範圍內**，各自依原始授權使用：
+
+- [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)：MIT。
+- Python（python.org 嵌入式版）：PSF License。
+- 模型權重：依 Hugging Face 上各模型頁面的授權。Strata README 註明，`qwen-nvidia-nvfp4` 的授權禁止移除安全限制。
