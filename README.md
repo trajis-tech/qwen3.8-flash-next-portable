@@ -33,7 +33,7 @@ START.bat
 - **改參數：** 換模型家族、context 或 vision 時，會自動重跑 Strata 安裝，已下載的檔案會保留。換金鑰不需要重跑安裝。
 - **崩潰：** Strata 或閘道任一方結束，另一方會一起停掉，視窗會停住讓你看到錯誤。
 
-需求：Windows 10/11 原生（不支援 WSL2）、NVIDIA RTX 20–50 系 12 GB 以上、驅動 580 以上、RAM 64 GB 以上、硬碟約 150 GB（NVMe）、固定 65536 MB 的分頁檔（需要管理員權限，腳本只會提醒、不會改）。
+需求：Windows 10/11 原生（不支援 WSL2）、NVIDIA RTX 20–50 系 12 GB 以上、驅動 580 以上、RAM 64 GB 以上、硬碟約 150 GB（NVMe）、固定 65536 MB 的分頁檔（可用 `START.bat -SetPageFile` 設定，見下方「分頁檔」）。
 
 參數都加在 `START.bat` 後面（各項預設值見下一節「模型設定」）：
 
@@ -41,9 +41,32 @@ START.bat
 .\START.bat -ClientKey mykey                          # 建議：區網連線需要金鑰
 .\START.bat -Family qwen-nvfp4-gptq -Context 65536    # 換模型家族／context（會自動補裝）
 .\START.bat -CheckOnly                                # 只檢查硬體與 Strata 的 --check（會下載約 30 MB 的原始碼與 Python，不下載模型）
+.\START.bat -SetPageFile                              # 設定固定 64 GB 分頁檔（需系統管理員，設完要重開機）
 .\setup_next.ps1                                      # 只下載不啟動（例如先在網路快的地方下載）
 .\START.bat -Reinstall                                # 強制重跑安裝，並把舊的系統 venv 換成可攜 Python
 ```
+
+### 分頁檔
+
+Windows 規定所有程式加起來能申請的記憶體不能超過「RAM＋分頁檔」。Strata 的引擎在低 RAM 模式約需 80 GiB（一般模式約 100 GiB），其中約 30 GiB 是 Windows 為顯示卡驅動計入的。系統自動管理的分頁檔常常來不及長大，所以 Strata 要求**固定 65536 MB**。不夠時引擎會縮小顯存裡的專家快取而明顯變慢，最壞的情況是無法啟動。
+
+```powershell
+.\START.bat -SetPageFile                 # 放在模型資料夾所在的磁碟，系統碟維持系統管理大小
+.\START.bat -SetPageFile -PageFileDrive E
+.\set_pagefile.ps1 -DryRun               # 只顯示會寫入什麼，不改任何東西
+.\set_pagefile.ps1 -Restore              # 還原成改動前的設定
+```
+
+`-SetPageFile` 會：
+
+1. 跳出 Windows 的系統管理員確認。
+2. 檢查目標磁碟：拒絕 USB 和傳統硬碟，並確認剩餘空間足夠。
+3. 把目前設定備份到 `portable_state\`。
+4. 寫入新設定。
+
+**設定要重新開機才會生效。** 下載中的模型會在下次啟動時續傳。之後啟動器開頭會顯示 `Page file: 65536 MB fixed`；如果已設定但還沒重開機，會提醒你先重開。
+
+固定 64 GB 只會佔用該磁碟的空間。平常不會變慢，只有 RAM 真的不夠時才會寫入。
 
 載入模型需要數分鐘；`http://127.0.0.1:8000/health` 回 200 才代表可用，載入中回 503。
 
@@ -140,11 +163,17 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 - 搬到含空白與中文的路徑後，自動改寫設定檔的絕對路徑（不分大小寫）。
 - `next_gateway.py`：預設原樣轉發、選用的補值與溫度上限、SSE 逐段轉發、上游不通回 502。
 - `format_probe.py` 的判定邏輯。
+- `set_pagefile.ps1 -DryRun`：
+  - 新設定的計算：從自動管理轉換、保留其他磁碟、取代既有設定、設在系統碟本身。
+  - 已設定時不重寫、找不到磁碟、空間不足、還原備份。
+  - 對磁碟類型的辨識（NVMe / SSD）。
+
+**已在真機（RTX 5070 Ti、64 GB RAM）上確認：** 可攜 Python 與 pip 的安裝、setup.py 參數全部被接受且不會停下來詢問、引擎下載與 SHA-256 驗證、git clone 路線。
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
-- 真正的 Strata `setup.py --family … --no-start --yes …` 安裝流程與模型下載；參數名稱是對照 setup.py 的選項清單寫的。
-- python.org 嵌入式 zip 加 get-pip 的實際下載與安裝。這是常見做法，但本次沒有實際下載測試。
+- 模型下載完成後的實際載入、推理與讀圖。
+- `set_pagefile.ps1` 實際寫入登錄檔與重開機後生效：寫入的格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
 - 用 zip（而非 git）取得原始碼時，Strata 選引擎版本的方式是否依賴 git 資訊。有裝 git 的電腦會走 git clone，不受影響。
 
 ## 疑難排解

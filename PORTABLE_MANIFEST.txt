@@ -18,6 +18,7 @@ Shipped files (small):
   START.bat                 one click: install what is missing, then start
   start_next.ps1            the logic behind START.bat (all options live here)
   setup_next.ps1            download everything without starting
+  set_pagefile.ps1          optional: fixed 65536 MB page file (admin; START.bat -SetPageFile), -DryRun, -Restore
   next_gateway.py           OpenAI/Anthropic-compatible front door
   next_config.json          optional gateway sampling overrides (all null: Strata's official defaults apply)
   format_probe.py           measures strict-format compliance per temperature

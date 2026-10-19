@@ -23,7 +23,10 @@ param(
     [string]$PythonVersion = "3.12.10",
     [switch]$Reinstall,
     [switch]$SetupOnly,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$SetPageFile,              # set a fixed page file (admin, then reboot) instead of starting
+    [string]$PageFileDrive = "",       # default: this folder's drive
+    [int]$PageFileMB = 65536
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,9 +99,30 @@ function Test-Hardware {
     } else {
         Write-Warn "This folder is on a network path; put it on a local NVMe drive."
     }
-    $page = @(Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue) | Select-Object -First 1
-    if (-not $page -or $page.InitialSize -ne $page.MaximumSize -or $page.MaximumSize -lt 65536) {
-        Write-Warn "Strata recommends a fixed 65536 MB page file (initial = maximum). See README.md."
+    Test-PageFile
+}
+
+# Strata needs a fixed-size page file of 65536 MB in total. System-managed files do not count
+# because they may not grow in time. Settings apply only after a reboot, so compare with usage.
+function Test-PageFile {
+    $fixedMB = 0
+    $pending = $false
+    if (-not (Get-CimInstance Win32_ComputerSystem).AutomaticManagedPagefile) {
+        $usage = @(Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue)
+        foreach ($p in @(Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue)) {
+            if ($p.InitialSize -gt 0 -and $p.InitialSize -eq $p.MaximumSize) {
+                $fixedMB += $p.MaximumSize
+                $active = $usage | Where-Object { $_.Name -eq $p.Name } | Select-Object -First 1
+                if (-not $active -or $active.AllocatedBaseSize -lt $p.MaximumSize) { $pending = $true }
+            }
+        }
+    }
+    if ($fixedMB -lt 65536) {
+        Write-Warn "Strata needs a fixed 65536 MB page file (now: $fixedMB MB fixed). Run START.bat -SetPageFile, then restart Windows."
+    } elseif ($pending) {
+        Write-Warn "The page file is set to $fixedMB MB but not active yet: restart Windows first."
+    } else {
+        Write-Step "Page file: $fixedMB MB fixed"
     }
 }
 
@@ -226,6 +250,12 @@ function Update-StrataConfig($config) {
 }
 
 # ---- Run ----
+if ($SetPageFile) {
+    $pf = @{ SizeMB = $PageFileMB }
+    if ($PageFileDrive) { $pf.Drive = $PageFileDrive }
+    & (Join-Path $root "set_pagefile.ps1") @pf
+    exit $LASTEXITCODE
+}
 Test-Hardware
 $env:PATH = "$scripts;$scripts\Scripts;$env:PATH"
 $env:NEXT_ROOT = $root
