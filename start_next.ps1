@@ -229,6 +229,16 @@ function Install-Model {
     Write-Marker @{ key = $want; family = $Family; config = $written.Name; root = $root; installed = (Get-Date).ToString("s") }
 }
 
+# Strata checks response_format json_schema answers against the schema only when the jsonschema
+# package is installed; without it a schema is reduced to "one JSON object". Its setup does not install it.
+function Install-Extras {
+    & $python -c "import jsonschema"
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Step "Installing jsonschema (full response_format json_schema checking)"
+    & $python -m pip install --quiet --disable-pip-version-check "jsonschema>=4.23,<5"
+    if ($LASTEXITCODE -ne 0) { Write-Warn "jsonschema could not be installed; json_schema answers are only checked to be one JSON object." }
+}
+
 # Keys this bundle needs in the Strata config, re-applied every start because setup rewrites its own keys.
 # Also rewrites absolute paths when the folder was moved or copied after install.
 function Update-StrataConfig($config) {
@@ -268,6 +278,7 @@ if ($CheckOnly) {
 }
 if ($Reinstall -and (Test-Path $marker)) { Remove-Item $marker }
 Install-Model
+Install-Extras
 $config = Find-StrataConfig
 if (-not $config) { throw "No Strata config found in $src; run START.bat -Reinstall" }
 Update-StrataConfig $config

@@ -129,6 +129,7 @@ print(answer.choices[0].message.content)
 本包的做法：
 
 - **結構化輸出交給引擎。** `response_format`（含 `json_schema`）、`stop`、`seed`、`logit_bias`、`min_p`、penalties 等欄位一律原樣轉發。Strata 的 `serve/` 內建結構化輸出模組（`structured.py`）。
+- **完整的 schema 檢查。** Strata 要裝了 `jsonschema` 套件，才會依 schema 檢查欄位和型別；沒裝時只檢查「是一個 JSON 物件」。它自己的 setup 不會裝這個套件，所以由啟動器補上。
 - **對話模板由 Strata 處理。** 沿用 Qwen 官方 `chat_template.jinja` 的 reasoning 句子，閘道不自行組提示詞。
 - **取樣用官方值。** 由 Strata 依家族補上，閘道不改動客戶端送來的任何值（`next_config.json` 全部是 `null`）。
 - **不截斷。** `max_tokens` 只在超過剩餘 context 時才被夾住（`fit_max_tokens`），沒有固定上限。
@@ -140,6 +141,27 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 ```
 
 它會對「純 JSON」「json_schema 結構化輸出」「只回 OK」「固定三行」「工具呼叫」五種格式各跑幾次，印出各溫度的通過率與失敗原因（例如 `finish_reason=length` 代表是被截斷，不是格式問題）。如果低溫明顯較好，才在 `next_config.json` 填 `sampling.temperature`（只影響沒帶溫度的請求），或啟動時加 `-TemperatureCap 0.6`（連客戶端明確送來的高溫也壓下來）。
+
+## 速度
+
+實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，剛啟動、快取還在暖機時。
+
+| 項目 | 數字 |
+|---|---|
+| 載入模型 | 約 1–2 分鐘 |
+| 讀提示詞 | 6.7K tokens 約 29 秒；23.9K tokens 約 49 秒 |
+| 產生文字 | 7.5 → 15.8 tok/s（專家快取命中率 33% → 53%，仍在上升） |
+
+Strata 文件的參考值：在 RTX 5090 上模擬「16 GB 顯卡＋64 GB RAM、64K context」，暖機後的產生速度是 54–56 tok/s；RAM 92 GiB 以上時是 67 tok/s。參考機的 CPU 是 Ryzen 9 9950X3D（AVX-512）。快取沒命中的專家要在 CPU 上算，所以只支援 AVX2 的 CPU 會比較慢。
+
+為什麼會慢、能做什麼：
+
+- **剛啟動最慢。** 64 GB 的電腦會進入低 RAM 模式：大部分專家第一次用到時才從 SSD 讀進來，再由 Windows 留在 RAM 裡；顯示卡的專家快取也會依實際用到的專家自動調整。多跑幾個請求，速度和命中率都會上升。
+- **跑模型時關掉其他程式（尤其是瀏覽器）。** 低 RAM 模式能留在 RAM 的專家是「可用 RAM 減 6 GiB」，其他程式吃掉的 RAM 都會變成 SSD 讀取。
+- **代理類客戶端（如 Codex）第一輪特別慢。** 它們每次都會送上萬 token 的系統提示詞和工具定義。Strata 會在每一輪結束時記下檢查點，同一段對話的下一輪只讀新增的 token，所以只有第一輪要付完整的讀取時間。
+- **不需要讀圖時可用 `-Vision no`。** CPU 圖片編碼器約佔 1–2 GiB RAM，在 64 GB 的電腦上會少留一些專家在 RAM 裡。這只影響 RAM 用量，Strata 文件說它不影響產生速度。
+- **加 RAM 效果最大。** 92 GiB 以上時，所有專家都常駐 RAM，不再讀 SSD。
+- **自己量測：** 模型執行中時，在 `strata-nvfp4\` 跑 Strata 附的 `BENCH.bat`，約 10 分鐘會產生一份可分享的報告。
 
 ## 與網路上流傳的部署教學的差異
 
@@ -168,12 +190,18 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
   - 已設定時不重寫、找不到磁碟、空間不足、還原備份。
   - 對磁碟類型的辨識（NVMe / SSD）。
 
-**已在真機（RTX 5070 Ti、64 GB RAM）上確認：** 可攜 Python 與 pip 的安裝、setup.py 參數全部被接受且不會停下來詢問、引擎下載與 SHA-256 驗證、git clone 路線。
+**已在真機（RTX 5070 Ti、64 GB RAM）上確認：**
+
+- **安裝：** 可攜 Python 與 pip、setup.py 參數全部被接受且不會停下來詢問、git clone 路線。
+- **下載：** 引擎、模型、圖片編碼器全部下載完成並通過 SHA-256 驗證。
+- **分頁檔：** 設為固定 65536 MB 並重開機後，啟動器的檢查顯示 `65536 MB fixed`，Strata 的警告也消失。
+- **執行：** 模型載入、經閘道使用 `/v1/responses` 推理，Strata 套用了設定檔的官方取樣預設。
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
-- 模型下載完成後的實際載入、推理與讀圖。
-- `set_pagefile.ps1` 實際寫入登錄檔與重開機後生效：寫入的格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
+- 實際傳圖片給模型讀圖。
+- 啟動器自動安裝 `jsonschema`，以及之後 `json_schema` 的完整檢查。
+- `set_pagefile.ps1` 實際寫入登錄檔：寫入格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
 - 用 zip（而非 git）取得原始碼時，Strata 選引擎版本的方式是否依賴 git 資訊。有裝 git 的電腦會走 git clone，不受影響。
 
 ## 疑難排解
