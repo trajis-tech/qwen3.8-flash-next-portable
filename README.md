@@ -63,6 +63,21 @@ print(client.chat.completions.create(model="Qwen3.8-Flash-Next",
       messages=[{"role": "user", "content": "請只回答 OK"}], max_tokens=2048).choices[0].message.content)
 ```
 
+傳圖片（預設已開啟讀圖）：
+
+```python
+import base64
+image = base64.b64encode(open("photo.jpg", "rb").read()).decode()
+answer = client.chat.completions.create(model="Qwen3.8-Flash-Next", max_tokens=2048, messages=[{
+    "role": "user",
+    "content": [
+        {"type": "text", "text": "這張圖裡有什麼？"},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}},
+    ],
+}])
+print(answer.choices[0].message.content)
+```
+
 ## 模型設定
 
 原則是**以 Strata 和 Qwen 官方設定為準，本包只補可攜與連線需要的部分**。
@@ -76,7 +91,7 @@ print(client.chat.completions.create(model="Qwen3.8-Flash-Next",
 | `host` | 固定 `127.0.0.1`（本包加的） | Strata 本體不對外，區網一律經閘道與金鑰。 |
 | `api_key` | `-UpstreamKey` 有設才寫入，沒設就移除 | 每次啟動重新套用，換金鑰不用重跑安裝。 |
 | 低 RAM 模式 | Strata 自動判斷 | 低於約 92 GiB RAM 時，部分專家從硬碟讀取。 |
-| Vision | `no`（`-Vision yes` 可開） | 省記憶體；需要讀圖再開。 |
+| 讀圖（Vision） | `yes`（預設開啟） | 對 NVFP4 家族，Strata 會把 `yes` 對應到 CPU 編碼器：不佔顯存，每張圖約 2–6 秒，額外下載約 0.9 GB，每張圖預設最多 1024 個 token。`-Vision gpu` 比較快，但會從顯存保留空間給編碼器，16 GB 卡會壓縮到專家快取；`-Vision no` 關閉。 |
 
 標「本包加的」項目，由 `portable\strata_config.py` 在每次啟動時寫入 `strata-*.json`。之所以每次都寫，是因為 Strata 重跑 setup 時會重寫它自己管理的欄位。
 

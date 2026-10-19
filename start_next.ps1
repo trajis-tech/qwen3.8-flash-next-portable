@@ -12,7 +12,7 @@ param(
     [int]$UpstreamPort = 8080,
     [string]$Family = "qwen-nvidia-nvfp4",
     [int]$Context = 0,                 # 0 = let Strata pick from VRAM (its README: 16 GB -> 65536)
-    [string]$Vision = "no",
+    [string]$Vision = "yes",           # images on; for NVFP4 Strata maps yes -> CPU encoder (no VRAM cost)
     [string]$ClientKey = "",
     [string]$UpstreamKey = "",
     [double]$Temperature = [double]::NaN,
