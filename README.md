@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next 可攜接口（Strata NVFP4）
 
-在單張 12 GB 以上的 NVIDIA RTX 顯卡加 64 GB RAM 的 Windows 電腦上，一鍵部署 Qwen3.8-Flash-Next（125B MoE，NVFP4 專家），並提供 OpenAI／Anthropic 相容 API。推理引擎是 [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)，本專案負責可攜封裝、啟動流程與 API 入口。
+在單張 12 GB 以上的 NVIDIA RTX 顯卡加 64 GB RAM 的 Windows 電腦上，一鍵部署 Qwen3.8-Flash-Next（125B MoE；預設用 ISTA-DASLab 的 GSQ-RCO IQ3_S 量化，也可改用 NVFP4），並提供 OpenAI／Anthropic 相容 API。推理引擎是 [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)，本專案負責可攜封裝、啟動流程與 API 入口。
 
 **一鍵啟動：缺什麼自動下載什麼，全部都在就直接離線啟動。** 所有東西都裝在這個資料夾裡，唯一無法可攜的是 NVIDIA 驅動。本儲存庫只有啟動腳本（約 50 KB），模型與引擎在第一次啟動時才下載。
 
@@ -9,7 +9,7 @@
 | 一鍵啟動器 | `START.bat` → `start_next.ps1` |
 | 推理引擎與模型 API | Strata（`strata-nvfp4\`，只聽 `127.0.0.1:8080`） |
 | 區網入口 | `next_gateway.py`（`0.0.0.0:8000`，金鑰檢查，請求原樣轉發） |
-| 模型 | `Strata-data\`（約 130 GB，首次啟動自動下載） |
+| 模型 | `Strata-data\`（預設約 90 GB，NVFP4 約 130 GB；首次啟動自動下載） |
 | Python | `strata-nvfp4\.venv\Scripts\`（嵌入式 Python，首次啟動自動下載） |
 
 ## 一鍵啟動
@@ -26,7 +26,7 @@ START.bat
 |---|---|---|
 | 1. Strata 原始碼 `strata-nvfp4\` | 略過 | 有 git 就 clone，沒有就下載 zip（釘在 `v0.1.44.1-nvfp4.2`） |
 | 2. 可攜 Python `strata-nvfp4\.venv\Scripts\` | 略過 | 下載 python.org 嵌入式 3.12.10 與 pip（不需安裝、不寫登錄檔） |
-| 3. 引擎＋模型 `Strata-data\` | 略過（看 `portable_state\installed.json`） | 交給 Strata 自己的下載器（約 130 GB，中斷後再按一次 START.bat 會續傳） |
+| 3. 引擎＋模型 `Strata-data\` | 略過（看 `portable_state\installed.json`） | 交給 Strata 自己的下載器（預設約 90 GB，中斷後再按一次 START.bat 會續傳） |
 | 4. 啟動 | Strata（`127.0.0.1:8080`）＋閘道（`0.0.0.0:8000`） | |
 
 - **搬移：** 裝好之後可以整個資料夾搬到別的磁碟或別台電腦。下次啟動時會偵測位置改變，自動改寫 Strata 設定檔裡的絕對路徑。
@@ -39,7 +39,8 @@ START.bat
 
 ```powershell
 .\START.bat -ClientKey mykey                          # 建議：區網連線需要金鑰
-.\START.bat -Family qwen-nvfp4-gptq -Context 65536    # 換模型家族／context（會自動補裝）
+.\START.bat -Family qwen-nvfp4-gptq                   # 換成 NVFP4（RAM 96 GB 以上建議；會自動補裝）
+.\START.bat -Model IQ3_XXS -Context 32768             # 換量化大小／context（會自動補裝）
 .\START.bat -CheckOnly                                # 只檢查硬體與 Strata 的 --check（會下載約 30 MB 的原始碼與 Python，不下載模型）
 .\START.bat -SetPageFile                              # 設定固定 64 GB 分頁檔（需系統管理員，設完要重開機）
 .\setup_next.ps1                                      # 只下載不啟動（例如先在網路快的地方下載）
@@ -107,16 +108,32 @@ print(answer.choices[0].message.content)
 
 | 項目 | 設定 | 來源與理由 |
 |---|---|---|
-| 模型家族 | `qwen-nvidia-nvfp4`（`-Family` 可改） | NVIDIA 的 NVFP4 檢查點，轉成 Strata 格式，約 127 GB，64 GB RAM 可跑。可改用 `qwen-nvfp4-gptq`（Strata 預設家族）。`qwen-nvfp4-mix` 與 `qwen-q8` 需要 128 GB RAM。 |
+| 模型 | `qwen` 家族、`IQ3_S` 大小（`-Family`、`-Model` 可改） | ISTA-DASLab 的 GSQ-RCO 量化（3.5-bit），下載 83.6 GB，另加 Strata 抓的 MTP 草稿層約 5 GB。執行時約 52 GiB RAM，**能整個放進 64 GB RAM**，不必進低 RAM 模式讀 SSD；Strata 也把它列為 64 GB 電腦的預設，但要求「其他程式少開」。精度與速度的取捨見下表。 |
 | Context | 交給 Strata 依顯存決定（`-Context` 可指定） | Strata README：32 GB → 262144、24 GB → 131072、16 GB → 65536、12 GB → 32768。 |
 | 取樣預設 | Strata 依家族寫入 `temperature 1.0 / top_p 0.95 / top_k 20` | 已對照 Qwen3.8-Flash-Next 官方 `generation_config.json`，數值一致。只套用在請求沒帶的欄位，請求自帶的值優先。閘道預設不改任何取樣欄位。 |
 | `fit_max_tokens` | `true`（本包加的） | Strata 預設在 `max_tokens` 超過剩餘 context 時回 HTTP 400，代理類客戶端常送很大的值。開啟後會夾到剩餘空間，回應的 `finish_reason` 照常標示 `length`。 |
 | `host` | 固定 `127.0.0.1`（本包加的） | Strata 本體不對外，區網一律經閘道與金鑰。 |
 | `api_key` | `-UpstreamKey` 有設才寫入，沒設就移除 | 每次啟動重新套用，換金鑰不用重跑安裝。 |
 | 低 RAM 模式 | Strata 自動判斷 | 低於約 92 GiB RAM 時，部分專家從硬碟讀取。 |
-| 讀圖（Vision） | `yes`（預設開啟） | 對 NVFP4 家族，Strata 會把 `yes` 對應到 CPU 編碼器：不佔顯存，每張圖約 2–6 秒，額外下載約 0.9 GB，每張圖預設最多 1024 個 token。`-Vision gpu` 比較快，但會從顯存保留空間給編碼器，16 GB 卡會壓縮到專家快取；`-Vision no` 關閉。 |
+| 讀圖（Vision） | `yes`（預設開啟） | 額外下載約 0.9 GB 的編碼器，交給 Strata 決定放在哪裡。依 Strata 原始碼：IQ3_S 這類 GGUF 會放在 **GPU**，保留約 1.4 GB 顯存，文字慢幾個百分點；NVFP4 會放在 **CPU**，不佔顯存，每張圖約 2–6 秒，但約佔 1–2 GiB RAM。IQ3_S 在 64 GB 上 RAM 很緊，所以 Strata 這樣分配是合理的。安裝輸出的 `images: on (encoder on the …)` 會顯示實際位置。`-Vision cpu`、`-Vision gpu` 可強制指定，`-Vision no` 關閉。 |
 
 標「本包加的」項目，由 `portable\strata_config.py` 在每次啟動時寫入 `strata-*.json`。之所以每次都寫，是因為 Strata 重跑 setup 時會重寫它自己管理的欄位。
+
+### 可選的量化版本
+
+以下是 Strata README 的官方實測：RTX 5090、Ryzen 9 9950X3D、128 GB RAM。「與 Q8_0 一致」是逐 token 和最高精度 Q8_0 版本比對的一致率。「所需 RAM」是達到該速度需要的電腦 RAM。
+
+| 指定方式 | 與 Q8_0 一致 | 速度 | 執行時 RAM | 所需 RAM |
+|---|---|---|---|---|
+| 預設（`qwen` + `IQ3_S`） | 90.0% | 228 tok/s | 52 GiB | 64 GB |
+| `-Model IQ3_XXS` | 87.3% | 239 tok/s | 45 GiB | 64 GB |
+| `-Family qwen-nvfp4-gptq` | 93.6% | 177 tok/s | 69 GiB | 96 GB |
+| `-Family qwen-nvidia-nvfp4` | 92.9% | 167 tok/s | 69 GiB | 96 GB |
+| `-Family qwen-nvfp4-mix` | 95.0% | 91 tok/s | 105 GiB | 128 GB |
+
+- **64 GB 的電腦：** NVFP4 會進入低 RAM 模式，Strata 文件寫的速度約 115 tok/s，同一台參考機上約是 IQ3_S 的一半。所以 64 GB 預設用 IQ3_S，96 GB 以上建議改用 GPTQ NVFP4。
+- **IQ3_S 的精度：** 逐 token 一致率比 GPTQ NVFP4 低 3.6 個百分點；但 ISTA-DASLab 公布的基準測試，平均分數與原始 BF16 模型持平（100.3%–101.4%，在誤差範圍內）。
+- **換版本：** 會補下載該版本的檔案，舊檔保留，可隨時切回。
 
 ## 嚴格格式輸出
 
@@ -144,22 +161,25 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 
 ## 速度
 
-實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，剛啟動、快取還在暖機時。
+實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，使用 **NVIDIA NVFP4**（低 RAM 模式，非現在的預設），以 Codex 類代理客戶端連續工作約 10 輪。預設 IQ3_S 在這台的數字還沒量。
 
 | 項目 | 數字 |
 |---|---|
 | 載入模型 | 約 1–2 分鐘 |
-| 讀提示詞 | 6.7K tokens 約 29 秒；23.9K tokens 約 49 秒 |
-| 產生文字 | 7.5 → 15.8 tok/s（專家快取命中率 33% → 53%，仍在上升） |
+| 第一輪讀提示詞 | 23.9K tokens 約 49 秒 |
+| 之後每輪讀提示詞 | 31K–57K tokens 約 17–20 秒（Strata 只讀新增的部分） |
+| 產生文字 | 剛啟動 7.5–15.8 tok/s；暖機後穩定在 **10.5–12 tok/s** |
+| 專家快取命中率 | 33% → 穩定在 54–63% |
 
 Strata 文件的參考值：在 RTX 5090 上模擬「16 GB 顯卡＋64 GB RAM、64K context」，暖機後的產生速度是 54–56 tok/s；RAM 92 GiB 以上時是 67 tok/s。參考機的 CPU 是 Ryzen 9 9950X3D（AVX-512）。快取沒命中的專家要在 CPU 上算，所以只支援 AVX2 的 CPU 會比較慢。
 
 為什麼會慢、能做什麼：
 
-- **剛啟動最慢。** 64 GB 的電腦會進入低 RAM 模式：大部分專家第一次用到時才從 SSD 讀進來，再由 Windows 留在 RAM 裡；顯示卡的專家快取也會依實際用到的專家自動調整。多跑幾個請求，速度和命中率都會上升。
+- **64 GB 的電腦用預設的 IQ3_S。** 它能整個放進 RAM，不必進低 RAM 模式；以下幾點主要針對 NVFP4。
+- **剛啟動最慢。** 64 GB 的電腦用 NVFP4 時會進入低 RAM 模式：大部分專家第一次用到時才從 SSD 讀進來，再由 Windows 留在 RAM 裡；顯示卡的專家快取也會依實際用到的專家自動調整。多跑幾個請求，速度和命中率都會上升。
 - **跑模型時關掉其他程式（尤其是瀏覽器）。** 低 RAM 模式能留在 RAM 的專家是「可用 RAM 減 6 GiB」，其他程式吃掉的 RAM 都會變成 SSD 讀取。
 - **代理類客戶端（如 Codex）第一輪特別慢。** 它們每次都會送上萬 token 的系統提示詞和工具定義。Strata 會在每一輪結束時記下檢查點，同一段對話的下一輪只讀新增的 token，所以只有第一輪要付完整的讀取時間。
-- **不需要讀圖時可用 `-Vision no`。** CPU 圖片編碼器約佔 1–2 GiB RAM，在 64 GB 的電腦上會少留一些專家在 RAM 裡。這只影響 RAM 用量，Strata 文件說它不影響產生速度。
+- **不需要讀圖時可用 `-Vision no`。** 圖片編碼器放在 GPU 時佔約 1.4 GB 顯存，放在 CPU 時佔 1–2 GiB RAM；關掉可以把這些空間還給專家。
 - **加 RAM 效果最大。** 92 GiB 以上時，所有專家都常駐 RAM，不再讀 SSD。
 - **自己量測：** 模型執行中時，在 `strata-nvfp4\` 跑 Strata 附的 `BENCH.bat`，約 10 分鐘會產生一份可分享的報告。
 
@@ -199,6 +219,7 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
+- 預設 IQ3_S（`--family qwen --model IQ3_S`）在真機上的安裝與速度。上面的真機紀錄是用 NVIDIA NVFP4 跑的。
 - 實際傳圖片給模型讀圖。
 - 啟動器自動安裝 `jsonschema`，以及之後 `json_schema` 的完整檢查。
 - `set_pagefile.ps1` 實際寫入登錄檔：寫入格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。

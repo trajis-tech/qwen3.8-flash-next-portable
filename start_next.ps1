@@ -10,7 +10,8 @@ param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8000,
     [int]$UpstreamPort = 8080,
-    [string]$Family = "qwen-nvidia-nvfp4",
+    [string]$Family = "qwen",          # ISTA-DASLab GSQ-RCO GGUF; qwen-nvfp4-gptq etc. for NVFP4 packs
+    [string]$Model = "",               # GGUF size; "" = IQ3_S for qwen (fits 64 GB RAM). Ignored for NVFP4 packs
     [int]$Context = 0,                 # 0 = let Strata pick from VRAM (its README: 16 GB -> 65536)
     [string]$Vision = "yes",           # images on; for NVFP4 Strata maps yes -> CPU encoder (no VRAM cost)
     [string]$ClientKey = "",
@@ -32,6 +33,10 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is very slow with the progress bar on PS 5.1
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# NVFP4 packs (and qwen-q8) come in one size; GGUF families pick a size with --model.
+if ($Family -match 'nvfp4|^qwen-q8$') { $Model = "" }
+elseif (-not $Model -and $Family -eq "qwen") { $Model = "IQ3_S" }
 
 $root = (Resolve-Path $PSScriptRoot).Path
 $src = Join-Path $root "strata-nvfp4"
@@ -95,7 +100,7 @@ function Test-Hardware {
         $drive = $root.Substring(0, 1)
         $freeGiB = [math]::Round((Get-PSDrive $drive).Free / 1GB, 1)
         Write-Step "Free disk on ${drive}: $freeGiB GiB"
-        if ($freeGiB -lt 150 -and -not (Test-Path $marker)) { Write-Warn "The model needs about 130 GB; less than 150 GB is free." }
+        if ($freeGiB -lt 150 -and -not (Test-Path $marker)) { Write-Warn "A model needs 90-130 GB; less than 150 GB is free." }
     } else {
         Write-Warn "This folder is on a network path; put it on a local NVMe drive."
     }
@@ -202,16 +207,18 @@ function Find-StrataConfig {
 
 function Install-Model {
     $contextKey = if ($Context -gt 0) { "$Context" } else { "auto" }
-    $want = "$Family|$contextKey|$Vision"
+    $want = "$Family|$Model|$contextKey|$Vision"
+    $label = if ($Model) { "$Family $Model" } else { $Family }
     $info = Read-Marker
     if (-not $Reinstall -and $info -and (Find-StrataConfig)) {
-        if ($info.key -eq $want) { Write-Step "Engine + model: present ($Family, context $contextKey)"; return }
-        Write-Step "Settings changed since install; running Strata setup again (finished downloads are kept)"
+        if ($info.key -eq $want) { Write-Step "Engine + model: present ($label, context $contextKey)"; return }
+        Write-Step "Settings changed since install; running Strata setup again for $label (finished downloads are kept)"
     } else {
-        Write-Step "Engine + model: installing $Family (about 130 GB; interrupted downloads resume on the next start)"
+        Write-Step "Engine + model: installing $label (90-130 GB; interrupted downloads resume on the next start)"
     }
     $setupArgs = @("setup.py", "--family", $Family, "--data-dir", $dataDir, "--host", "127.0.0.1", "--port", $UpstreamPort,
                    "--vision", $Vision, "--no-browser", "--yes", "--no-start")
+    if ($Model) { $setupArgs += @("--model", $Model) }
     if ($Context -gt 0) { $setupArgs += @("--context", $Context) }
     $started = (Get-Date).AddSeconds(-2)
     Push-Location $src
@@ -226,7 +233,7 @@ function Install-Model {
     if (-not $written) { $written = Find-StrataConfig }
     if (-not $written) { throw "Strata setup finished but no strata-*.json was found in $src" }
     Write-Step "Strata config: $($written.Name)"
-    Write-Marker @{ key = $want; family = $Family; config = $written.Name; root = $root; installed = (Get-Date).ToString("s") }
+    Write-Marker @{ key = $want; family = $Family; model = $Model; config = $written.Name; root = $root; installed = (Get-Date).ToString("s") }
 }
 
 # Strata checks response_format json_schema answers against the schema only when the jsonschema
@@ -273,7 +280,9 @@ Install-Source
 Install-Python
 if ($CheckOnly) {
     Push-Location $src
-    try { & $python setup.py --check --family $Family } finally { Pop-Location }
+    $checkArgs = @("setup.py", "--check", "--family", $Family)
+    if ($Model) { $checkArgs += @("--model", $Model) }
+    try { & $python @checkArgs } finally { Pop-Location }
     return
 }
 if ($Reinstall -and (Test-Path $marker)) { Remove-Item $marker }
