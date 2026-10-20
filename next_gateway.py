@@ -18,7 +18,9 @@ import argparse
 import http.client
 import json
 import os
+import socketserver
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -209,9 +211,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
 
+class GatewayServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind does a reverse-DNS lookup (socket.getfqdn) that can
+        # stall for seconds on some networks; the name is only used for logging.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = str(host), port
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Gateway for the Strata NVFP4 Qwen3.8-Flash-Next server")
-    parser.add_argument("--host", default="0.0.0.0", help="address to bind; 0.0.0.0 allows LAN clients")
+    parser.add_argument("--host", action="append", help="address to bind; repeat to listen on several (e.g. the LAN IP and 127.0.0.1); default 0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--upstream-host", default="127.0.0.1")
     parser.add_argument("--upstream-port", type=int, default=8080)
@@ -237,18 +250,24 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     args = parse_args()
     config = build_config(args)
-    server = ThreadingHTTPServer((args.host, args.port), GatewayHandler)
-    server.daemon_threads = True
-    server.args = args  # type: ignore[attr-defined]
-    server.cfg = config  # type: ignore[attr-defined]
-    print(f"-- Gateway on http://{args.host}:{args.port} -> Strata http://{args.upstream_host}:{args.upstream_port}", flush=True)
+    hosts = list(dict.fromkeys(args.host or ["0.0.0.0"]))
+    servers = []
+    for host in hosts:
+        server = GatewayServer((host, args.port), GatewayHandler)
+        server.args = args  # type: ignore[attr-defined]
+        server.cfg = config  # type: ignore[attr-defined]
+        servers.append(server)
+        print(f"-- Gateway on http://{host}:{args.port} -> Strata http://{args.upstream_host}:{args.upstream_port}", flush=True)
     print(f"-- Sampling defaults: {config['sampling']}  temperature cap: {config['temperature_cap']}", flush=True)
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         print("\n-- Shutting down", flush=True)
     finally:
-        server.server_close()
+        for server in servers:
+            server.server_close()
 
 
 if __name__ == "__main__":

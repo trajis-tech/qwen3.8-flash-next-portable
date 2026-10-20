@@ -4,10 +4,10 @@
 #   1. Strata source         -> strata-nvfp4\
 #   2. Portable Python       -> strata-nvfp4\.venv\Scripts\   (python.org embeddable, no install, no registry)
 #   3. Engine + model        -> strata-nvfp4\engine\, Strata-data\   (~130 GB, Strata's own resumable downloader)
-#   4. Start Strata on 127.0.0.1:UpstreamPort and the gateway on HostAddress:Port
+#   4. Start Strata on 127.0.0.1:UpstreamPort and the gateway on this PC's LAN IP + 127.0.0.1 (port Port)
 # When everything is present, nothing touches the network and it starts directly.
 param(
-    [string]$HostAddress = "0.0.0.0",
+    [string]$HostAddress = "lan",      # lan = this PC's LAN IPv4 + 127.0.0.1; or 0.0.0.0, 127.0.0.1, a specific IP
     [int]$Port = 8000,
     [int]$UpstreamPort = 8080,
     [string]$Family = "qwen",          # ISTA-DASLab GSQ-RCO GGUF; qwen-nvfp4-gptq etc. for NVFP4 packs
@@ -65,6 +65,20 @@ function Get-File($url, $out) {
             Start-Sleep -Seconds 5
         }
     }
+}
+
+# The private IPv4 (10/8, 172.16/12, 192.168/16) of the interface that carries the default route,
+# i.e. the address other PCs on the LAN reach. Re-detected every start, so a new DHCP lease is fine.
+function Get-LanIPv4 {
+    $private = '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
+    $routes = @(Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
+        Sort-Object { $_.RouteMetric + $_.InterfaceMetric })
+    foreach ($route in $routes) {
+        $ip = Get-NetIPAddress -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -match $private } | Select-Object -First 1
+        if ($ip) { return $ip.IPAddress }
+    }
+    return $null
 }
 
 function Read-Marker {
@@ -306,20 +320,37 @@ Write-Step "Starting Strata with $($config.Name) (model load can take several mi
 $strata = Start-Process -FilePath $python -ArgumentList @("serve\server.py", "--engine", "strata", "--config", (Q $config.Name), "--port", $UpstreamPort) -WorkingDirectory $src -PassThru -NoNewWindow
 $null = $strata.Handle   # cache the handle so ExitCode is readable after exit
 
-$gatewayArgs = @((Join-Path $root "next_gateway.py"), "--host", $HostAddress, "--port", $Port, "--upstream-port", $UpstreamPort)
+if ($HostAddress -eq "lan") {
+    $lanIp = Get-LanIPv4
+    if ($lanIp) {
+        $bindHosts = @($lanIp, "127.0.0.1")
+    } else {
+        Write-Warn "No LAN IPv4 address found; the API is available on this PC only. Use -HostAddress <IP> to choose one."
+        $bindHosts = @("127.0.0.1")
+    }
+} else {
+    $bindHosts = @($HostAddress)
+}
+$gatewayArgs = @((Join-Path $root "next_gateway.py"), "--port", $Port, "--upstream-port", $UpstreamPort)
+foreach ($h in $bindHosts) { $gatewayArgs += @("--host", $h) }
 if ($UpstreamKey) { $gatewayArgs += @("--upstream-key", $UpstreamKey) }
 if ($ClientKey)   { $gatewayArgs += @("--client-key", $ClientKey) }
 if (-not [double]::IsNaN($Temperature))    { $gatewayArgs += @("--temperature", $Temperature) }
 if (-not [double]::IsNaN($TopP))           { $gatewayArgs += @("--top-p", $TopP) }
 if ($TopK -ge 0)                           { $gatewayArgs += @("--top-k", $TopK) }
 if (-not [double]::IsNaN($TemperatureCap)) { $gatewayArgs += @("--temperature-cap", $TemperatureCap) }
-if (-not $ClientKey -and $HostAddress -ne "127.0.0.1") { Write-Warn "The API is open to the LAN without a key; consider -ClientKey." }
+$lanFacing = @($bindHosts | Where-Object { $_ -ne "127.0.0.1" })
+if (-not $ClientKey -and $lanFacing) { Write-Warn "The API is open to the LAN without a key; consider -ClientKey." }
 
 $gateway = Start-Process -FilePath $python -ArgumentList ($gatewayArgs | ForEach-Object { Q $_ }) -WorkingDirectory $root -PassThru -NoNewWindow
 $null = $gateway.Handle
 $code = 0
 try {
-    Write-Step "API: http://127.0.0.1:$Port/v1   readiness: http://127.0.0.1:$Port/health   (Ctrl+C to stop)"
+    $apiHost = "127.0.0.1"
+    if ($lanFacing) { $apiHost = $lanFacing[0] }
+    if ($apiHost -eq "0.0.0.0") { $apiHost = Get-LanIPv4; if (-not $apiHost) { $apiHost = "127.0.0.1" } }
+    Write-Step "API: http://${apiHost}:$Port/v1   readiness: http://${apiHost}:$Port/health   (Ctrl+C to stop)"
+    if ($apiHost -ne "127.0.0.1" -and $bindHosts -contains "127.0.0.1") { Write-Step "On this PC also: http://127.0.0.1:$Port/v1" }
     # If either process ends (crash, port in use, Ctrl+C), stop the other one too.
     while (-not $strata.HasExited -and -not $gateway.HasExited) { Start-Sleep -Milliseconds 500 }
     if ($strata.HasExited) {

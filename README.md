@@ -8,7 +8,7 @@
 |---|---|
 | 一鍵啟動器 | `START.bat` → `start_next.ps1` |
 | 推理引擎與模型 API | Strata（`strata-nvfp4\`，只聽 `127.0.0.1:8080`） |
-| 區網入口 | `next_gateway.py`（`0.0.0.0:8000`，金鑰檢查，請求原樣轉發） |
+| 區網入口 | `next_gateway.py`（`<內網IP>:8000` 與 `127.0.0.1:8000`，金鑰檢查，請求原樣轉發） |
 | 模型 | `Strata-data\`（預設約 90 GB，NVFP4 約 130 GB；首次啟動自動下載） |
 | Python | `strata-nvfp4\.venv\Scripts\`（嵌入式 Python，首次啟動自動下載） |
 
@@ -27,7 +27,7 @@ START.bat
 | 1. Strata 原始碼 `strata-nvfp4\` | 略過 | 有 git 就 clone，沒有就下載 zip（釘在 `v0.1.44.1-nvfp4.2`） |
 | 2. 可攜 Python `strata-nvfp4\.venv\Scripts\` | 略過 | 下載 python.org 嵌入式 3.12.10 與 pip（不需安裝、不寫登錄檔） |
 | 3. 引擎＋模型 `Strata-data\` | 略過（看 `portable_state\installed.json`） | 交給 Strata 自己的下載器（預設約 90 GB，中斷後再按一次 START.bat 會續傳） |
-| 4. 啟動 | Strata（`127.0.0.1:8080`）＋閘道（`0.0.0.0:8000`） | |
+| 4. 啟動 | Strata（`127.0.0.1:8080`）＋閘道（`<內網IP>:8000`、`127.0.0.1:8000`） | |
 
 - **搬移：** 裝好之後可以整個資料夾搬到別的磁碟或別台電腦。下次啟動時會偵測位置改變，自動改寫 Strata 設定檔裡的絕對路徑。
 - **改參數：** 換模型家族、context 或 vision 時，會自動重跑 Strata 安裝，已下載的檔案會保留。換金鑰不需要重跑安裝。
@@ -69,11 +69,18 @@ Windows 規定所有程式加起來能申請的記憶體不能超過「RAM＋分
 
 固定 64 GB 只會佔用該磁碟的空間。平常不會變慢，只有 RAM 真的不夠時才會寫入。
 
-載入模型需要數分鐘；`http://127.0.0.1:8000/health` 回 200 才代表可用，載入中回 503。
+載入模型需要數分鐘；`/health` 回 200 才代表可用，載入中回 503。啟動時會印出實際網址，例如：
+
+```text
+-- API: http://192.168.1.50:8000/v1   readiness: http://192.168.1.50:8000/health
+-- On this PC also: http://127.0.0.1:8000/v1
+```
 
 - 端點：`/v1/chat/completions`、`/v1/messages`（Anthropic 格式）、`/v1/models`、`/health`。`/v1/responses` 取決於 Strata 是否提供，沒有驗證過。
 - 模型名稱隨意填，API Key 填 `-ClientKey` 的值（沒設就填 `local`）。
-- 閘道綁 `0.0.0.0:8000`，區網可連。**建議一定要設 `-ClientKey`。** Strata 本體只聽 `127.0.0.1:8080`。只想本機使用就加 `-HostAddress 127.0.0.1`。
+- **閘道綁這台的內網 IP 與 `127.0.0.1`**，區網其他電腦用內網 IP 連，本機的程式用 `127.0.0.1`。Strata 本體只聽 `127.0.0.1:8080`。**建議一定要設 `-ClientKey`。**
+  - **內網 IP 怎麼找：** 每次啟動自動偵測，取「預設路由那張網卡」上的私有 IPv4（10.x、172.16–31.x、192.168.x）。VMware、WSL 等虛擬網卡不會被選到，也不會對它們開放；DHCP 換了 IP，重新啟動就會跟著更新。
+  - **其他選擇：** `-HostAddress 127.0.0.1` 只限本機，`-HostAddress 192.168.1.50` 指定某個 IP，`-HostAddress 0.0.0.0` 開放所有網卡。找不到內網 IP 時，會自動改成只限本機並提示你。
 - 區網連不進來時，在可信任的網路上用系統管理員 PowerShell 開放 TCP 8000（先用 `Get-NetConnectionProfile` 確認網路設定檔是 Private）：
 
   ```powershell
@@ -82,7 +89,7 @@ Windows 規定所有程式加起來能申請的記憶體不能超過「RAM＋分
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://<主機IP>:8000/v1", api_key="local")
+client = OpenAI(base_url="http://<內網IP>:8000/v1", api_key="local")   # 同一台電腦也可用 127.0.0.1
 print(client.chat.completions.create(model="Qwen3.8-Flash-Next",
       messages=[{"role": "user", "content": "請只回答 OK"}], max_tokens=2048).choices[0].message.content)
 ```
