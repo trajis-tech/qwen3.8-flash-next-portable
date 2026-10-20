@@ -161,7 +161,7 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 
 ## 速度
 
-實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，使用 **NVIDIA NVFP4**（低 RAM 模式，非現在的預設），以 Codex 類代理客戶端連續工作約 10 輪。預設 IQ3_S 在這台的數字還沒量。
+實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，使用 **NVIDIA NVFP4**（`-Family qwen-nvidia-nvfp4`，低 RAM 模式），以 Codex 類代理客戶端連續工作約 10 輪。預設 IQ3_S 的數字尚未實測。
 
 | 項目 | 數字 |
 |---|---|
@@ -219,7 +219,7 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
-- 預設 IQ3_S（`--family qwen --model IQ3_S`）在真機上的安裝與速度。上面的真機紀錄是用 NVIDIA NVFP4 跑的。
+- 預設 IQ3_S（`--family qwen --model IQ3_S`）在真機上的安裝與速度。
 - 實際傳圖片給模型讀圖。
 - 啟動器自動安裝 `jsonschema`，以及之後 `json_schema` 的完整檢查。
 - `set_pagefile.ps1` 實際寫入登錄檔：寫入格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
