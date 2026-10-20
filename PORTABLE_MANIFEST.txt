@@ -28,5 +28,5 @@ Shipped files (small):
   LICENSE                   MIT (this bundle's scripts only; downloaded components keep their own licenses)
 
 Only the NVIDIA driver (580+) cannot be portable. Target machine: Windows 10/11
-(native, not WSL2), RTX 20-50 with 12 GB+ VRAM, 64 GB+ RAM, ~150 GB free on NVMe,
+(native, not WSL2), RTX 20-50 with 16 GB+ VRAM (enforced), 64 GB+ RAM, ~150 GB free on NVMe,
 fixed 65536 MB page file. Prefer an ASCII-only folder path such as D:\QwenNext.

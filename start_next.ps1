@@ -12,7 +12,7 @@ param(
     [int]$UpstreamPort = 8080,
     [string]$Family = "qwen",          # ISTA-DASLab GSQ-RCO GGUF; qwen-nvfp4-gptq etc. for NVFP4 packs
     [string]$Model = "",               # GGUF size; "" = IQ3_S for qwen (fits 64 GB RAM). Ignored for NVFP4 packs
-    [int]$Context = 0,                 # 0 = let Strata pick from VRAM (its README: 16 GB -> 65536)
+    [int]$Context = 131072,            # 128K: agent clients (Codex etc.) outgrow 64K; 0 = let Strata pick from VRAM
     [string]$Vision = "yes",           # images on; for NVFP4 Strata maps yes -> CPU encoder (no VRAM cost)
     [string]$ClientKey = "",
     [string]$UpstreamKey = "",
@@ -82,6 +82,8 @@ function Test-Hardware {
         Write-Warn "This folder's path has non-ASCII characters: $root"
         Write-Warn "Native engines often fail on such paths. Prefer a plain path such as D:\QwenNext."
     }
+    # Hard requirement of this bundle: an NVIDIA GPU with 16 GB or more (16 GB cards report ~16300 MiB).
+    $bestMiB = 0
     if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
         Write-Warn "nvidia-smi not found: install an NVIDIA driver 580 or newer first."
     } else {
@@ -89,8 +91,12 @@ function Test-Hardware {
             $name, $mem, $driver = $line -split ",\s*"
             Write-Step "GPU: $name, $mem MiB VRAM, driver $driver"
             if ([double]($driver -replace '^(\d+\.\d+).*', '$1') -lt 580) { Write-Warn "Driver $driver is older than 580; Strata needs 580+ (CUDA 13)." }
-            if ([int]$mem -lt 11500) { Write-Warn "$name has less than 12 GB; Strata needs a 12 GB or larger GPU." }
+            if ([int]$mem -gt $bestMiB) { $bestMiB = [int]$mem }
         }
+    }
+    if ($bestMiB -lt 15500) {
+        $script:hardwareError = "This bundle needs an NVIDIA GPU with 16 GB of VRAM or more (found: $bestMiB MiB)."
+        Write-Warn $script:hardwareError
     }
     $ramGiB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
     Write-Step "RAM: $ramGiB GiB"
@@ -273,8 +279,10 @@ if ($SetPageFile) {
     & (Join-Path $root "set_pagefile.ps1") @pf
     exit $LASTEXITCODE
 }
+$script:hardwareError = $null
 Test-Hardware
-$env:PATH = "$scripts;$scripts\Scripts;$env:PATH"
+if ($script:hardwareError -and -not $CheckOnly) { throw $script:hardwareError }
+$env:PATH ="$scripts;$scripts\Scripts;$env:PATH"
 $env:NEXT_ROOT = $root
 Install-Source
 Install-Python

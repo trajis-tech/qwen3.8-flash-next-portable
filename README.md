@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next 可攜接口（Strata NVFP4）
 
-在單張 12 GB 以上的 NVIDIA RTX 顯卡加 64 GB RAM 的 Windows 電腦上，一鍵部署 Qwen3.8-Flash-Next（125B MoE；預設用 ISTA-DASLab 的 GSQ-RCO IQ3_S 量化，也可改用 NVFP4），並提供 OpenAI／Anthropic 相容 API。推理引擎是 [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)，本專案負責可攜封裝、啟動流程與 API 入口。
+在單張 16 GB 以上的 NVIDIA RTX 顯卡加 64 GB RAM 的 Windows 電腦上，一鍵部署 Qwen3.8-Flash-Next（125B MoE；預設用 ISTA-DASLab 的 GSQ-RCO IQ3_S 量化，也可改用 NVFP4），並提供 OpenAI／Anthropic 相容 API。推理引擎是 [strata-nvfp4](https://github.com/sergqwer/strata-nvfp4)，本專案負責可攜封裝、啟動流程與 API 入口。
 
 **一鍵啟動：缺什麼自動下載什麼，全部都在就直接離線啟動。** 所有東西都裝在這個資料夾裡，唯一無法可攜的是 NVIDIA 驅動。本儲存庫只有啟動腳本（約 50 KB），模型與引擎在第一次啟動時才下載。
 
@@ -33,7 +33,7 @@ START.bat
 - **改參數：** 換模型家族、context 或 vision 時，會自動重跑 Strata 安裝，已下載的檔案會保留。換金鑰不需要重跑安裝。
 - **崩潰：** Strata 或閘道任一方結束，另一方會一起停掉，視窗會停住讓你看到錯誤。
 
-需求：Windows 10/11 原生（不支援 WSL2）、NVIDIA RTX 20–50 系 12 GB 以上、驅動 580 以上、RAM 64 GB 以上、硬碟約 150 GB（NVMe）、固定 65536 MB 的分頁檔（可用 `START.bat -SetPageFile` 設定，見下方「分頁檔」）。
+需求：Windows 10/11 原生（不支援 WSL2）、NVIDIA RTX 20–50 系 **16 GB 以上**（啟動器會檢查，不足就停止）、驅動 580 以上、RAM 64 GB 以上、硬碟約 150 GB（NVMe）、固定 65536 MB 的分頁檔（可用 `START.bat -SetPageFile` 設定，見下方「分頁檔」）。
 
 參數都加在 `START.bat` 後面（各項預設值見下一節「模型設定」）：
 
@@ -102,6 +102,19 @@ answer = client.chat.completions.create(model="Qwen3.8-Flash-Next", max_tokens=2
 print(answer.choices[0].message.content)
 ```
 
+### 搭配 Codex
+
+Codex 只知道內建模型的 context 上限。對自訂模型，要自己告訴它，否則它不會在快滿之前自動壓縮對話；請求一旦超過 128K，Strata 就會回 400（`request exceeds the context window`）。
+
+在 `%USERPROFILE%\.codex\config.toml` 的**最上方、任何 `[...]` 區段之前**加入：
+
+```toml
+model_context_window = 131072
+model_auto_compact_token_limit = 110000
+```
+
+意思是：模型有 128K，對話到 110K 時自動壓縮，留約 20K 給思考、回答和工具結果。改完要重開 Codex。如果用 `-Context` 改了大小，這兩個數字也要跟著改。
+
 ## 模型設定
 
 原則是**以 Strata 和 Qwen 官方設定為準，本包只補可攜與連線需要的部分**。
@@ -109,7 +122,7 @@ print(answer.choices[0].message.content)
 | 項目 | 設定 | 來源與理由 |
 |---|---|---|
 | 模型 | `qwen` 家族、`IQ3_S` 大小（`-Family`、`-Model` 可改） | ISTA-DASLab 的 GSQ-RCO 量化（3.5-bit），下載 83.6 GB，另加 Strata 抓的 MTP 草稿層約 5 GB。執行時約 52 GiB RAM，**能整個放進 64 GB RAM**，不必進低 RAM 模式讀 SSD；Strata 也把它列為 64 GB 電腦的預設，但要求「其他程式少開」。精度與速度的取捨見下表。 |
-| Context | 交給 Strata 依顯存決定（`-Context` 可指定） | Strata README：32 GB → 262144、24 GB → 131072、16 GB → 65536、12 GB → 32768。 |
+| Context | **131072（128K）**（`-Context` 可改；`-Context 0` 交給 Strata 依顯存決定） | Codex 這類代理客戶端光是系統提示詞加工具定義就很大，64K 很快就會超過上限（Strata 會回 400，不會偷偷截斷）。Strata 對 16 GB 卡建議 64K；128K 的代價是 KV cache 會隨對話變長才在顯存裡長大，短對話不受影響，對話很長時能放在顯卡上的專家會變少、速度略降。搭配 Codex 的設定見下方「搭配 Codex」。 |
 | 取樣預設 | Strata 依家族寫入 `temperature 1.0 / top_p 0.95 / top_k 20` | 已對照 Qwen3.8-Flash-Next 官方 `generation_config.json`，數值一致。只套用在請求沒帶的欄位，請求自帶的值優先。閘道預設不改任何取樣欄位。 |
 | `fit_max_tokens` | `true`（本包加的） | Strata 預設在 `max_tokens` 超過剩餘 context 時回 HTTP 400，代理類客戶端常送很大的值。開啟後會夾到剩餘空間，回應的 `finish_reason` 照常標示 `length`。 |
 | `host` | 固定 `127.0.0.1`（本包加的） | Strata 本體不對外，區網一律經閘道與金鑰。 |
@@ -161,15 +174,18 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 
 ## 速度
 
-實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，使用 **NVIDIA NVFP4**（`-Family qwen-nvidia-nvfp4`，低 RAM 模式），以 Codex 類代理客戶端連續工作約 10 輪。預設 IQ3_S 的數字尚未實測。
+實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，客戶端是 Codex。
 
-| 項目 | 數字 |
-|---|---|
-| 載入模型 | 約 1–2 分鐘 |
-| 第一輪讀提示詞 | 23.9K tokens 約 49 秒 |
-| 之後每輪讀提示詞 | 31K–57K tokens 約 17–20 秒（Strata 只讀新增的部分） |
-| 產生文字 | 剛啟動 7.5–15.8 tok/s；暖機後穩定在 **10.5–12 tok/s** |
-| 專家快取命中率 | 33% → 穩定在 54–63% |
+| 項目 | 預設 IQ3_S | NVIDIA NVFP4（`-Family qwen-nvidia-nvfp4`） |
+|---|---|---|
+| 記憶體模式 | 整個放進 RAM | 低 RAM 模式（部分專家從 SSD 讀） |
+| 顯卡裡的專家快取 | 4,028 個（7.69 GiB） | 2,292 個（5.90 GiB） |
+| 載入模型 | 約 2–3 分鐘 | 約 1–2 分鐘 |
+| 讀提示詞 | 60.8K tokens 約 40 秒（伺服器啟動後第一輪，要讀完整對話歷史） | 23.9K tokens 約 49 秒（第一輪）；之後每輪只讀新增部分，約 17–20 秒 |
+| 產生文字 | **36.8–45 tok/s** | 暖機後 10.5–12 tok/s |
+| 專家快取命中率 | 80% | 54–63% |
+
+IQ3_S 的數字只量了一輪，NVFP4 的數字是連續約 10 輪的結果。
 
 Strata 文件的參考值：在 RTX 5090 上模擬「16 GB 顯卡＋64 GB RAM、64K context」，暖機後的產生速度是 54–56 tok/s；RAM 92 GiB 以上時是 67 tok/s。參考機的 CPU 是 Ryzen 9 9950X3D（AVX-512）。快取沒命中的專家要在 CPU 上算，所以只支援 AVX2 的 CPU 會比較慢。
 
@@ -215,11 +231,11 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 - **安裝：** 可攜 Python 與 pip、setup.py 參數全部被接受且不會停下來詢問、git clone 路線。
 - **下載：** 引擎、模型、圖片編碼器全部下載完成並通過 SHA-256 驗證。
 - **分頁檔：** 設為固定 65536 MB 並重開機後，啟動器的檢查顯示 `65536 MB fixed`，Strata 的警告也消失。
-- **執行：** 模型載入、經閘道使用 `/v1/responses` 推理，Strata 套用了設定檔的官方取樣預設。
+- **執行：** IQ3_S 與 NVIDIA NVFP4 都能載入，經閘道使用 `/v1/responses` 推理與工具呼叫，Strata 套用了設定檔的官方取樣預設。
+- **超過 context：** Strata 回 400 而不截斷；這就是預設用 128K、並在「搭配 Codex」寫明壓縮設定的原因。
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
-- 預設 IQ3_S（`--family qwen --model IQ3_S`）在真機上的安裝與速度。
 - 實際傳圖片給模型讀圖。
 - 啟動器自動安裝 `jsonschema`，以及之後 `json_schema` 的完整檢查。
 - `set_pagefile.ps1` 實際寫入登錄檔：寫入格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
