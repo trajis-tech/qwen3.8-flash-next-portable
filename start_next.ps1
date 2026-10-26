@@ -20,7 +20,7 @@ param(
     [double]$TopP = [double]::NaN,
     [int]$TopK = -1,
     [double]$TemperatureCap = [double]::NaN,
-    [string]$Tag = "v0.1.44.1-nvfp4.2",
+    [string]$Tag = "v0.2.0-beta-nvfp4.3",   # strata-nvfp4 release; changing it updates Strata, models are kept
     [string]$PythonVersion = "3.12.10",
     [switch]$Reinstall,
     [switch]$SetupOnly,
@@ -151,9 +151,61 @@ function Test-PageFile {
     }
 }
 
-# ---- 1. Strata source ----
+# ---- 1. Strata source (pinned to $Tag; changing -Tag updates it in place) ----
+$sourceInfo = Join-Path $state "source.json"
+
+function Get-SourceTag {
+    if (Test-Path $sourceInfo) {
+        try { return (Get-Content $sourceInfo -Raw -Encoding utf8 | ConvertFrom-Json).tag } catch { }
+    }
+    # Installs made before the tag was recorded: ask git, if this is a clone.
+    if ((Test-Path (Join-Path $src ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+        $ErrorActionPreference = "Continue"
+        $found = & git -C $src describe --tags --exact-match 2>$null
+        if ($LASTEXITCODE -eq 0 -and $found) { return "$found".Trim() }
+    }
+    return ""
+}
+
+function Save-SourceTag { @{ tag = $Tag } | ConvertTo-Json | Set-Content -Encoding utf8 $sourceInfo }
+
+function Get-SourceZip {
+    $zip = Join-Path $dl "strata-src-$Tag.zip"
+    $tmp = Join-Path $dl ("src-" + [guid]::NewGuid().ToString("N"))
+    if (-not (Test-Path $zip)) { Get-File "https://github.com/sergqwer/strata-nvfp4/archive/refs/tags/$Tag.zip" $zip }
+    Expand-Archive $zip -DestinationPath $tmp
+    return (Get-ChildItem $tmp -Directory | Select-Object -First 1).FullName
+}
+
+function Update-Source($from) {
+    Write-Step "Strata source: updating $from -> $Tag (models are kept)"
+    $hasGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
+    if ($hasGit -and (Test-Path (Join-Path $src ".git"))) {
+        & git -C $src fetch --depth 1 origin tag $Tag
+        if ($LASTEXITCODE -eq 0) {
+            & git -C $src checkout -q $Tag
+            if ($LASTEXITCODE -eq 0) { Save-SourceTag; return }
+        }
+        Write-Warn "git could not switch to $Tag; replacing the source folder instead"
+    }
+    # Fresh copy of the new version; keep the portable Python, everything else is rebuilt by setup.
+    $inner = Get-SourceZip
+    $old = "$src.old-" + (Get-Stamp)
+    Move-Item $src $old
+    Move-Item $inner $src
+    if (Test-Path (Join-Path $old ".venv")) { Move-Item (Join-Path $old ".venv") (Join-Path $src ".venv") }
+    Write-Step "Previous source kept as $old (safe to delete once the new version runs)"
+    Save-SourceTag
+}
+
 function Install-Source {
-    if (Test-Path (Join-Path $src "START-HERE.bat")) { Write-Step "Strata source: present"; return }
+    if (Test-Path (Join-Path $src "START-HERE.bat")) {
+        $have = Get-SourceTag
+        if ($have -eq $Tag) { Write-Step "Strata source: present ($Tag)"; return }
+        if (-not $have) { $have = "unknown version" }
+        Update-Source $have
+        return
+    }
     if (Test-Path $src) {
         # Left over from an interrupted clone or unzip; keep it aside rather than mixing versions.
         $aside = "$src.incomplete-" + (Get-Stamp)
@@ -163,16 +215,12 @@ function Install-Source {
     Write-Step "Strata source: downloading $Tag"
     if (Get-Command git -ErrorAction SilentlyContinue) {
         & git clone --depth 1 --branch $Tag https://github.com/sergqwer/strata-nvfp4 $src
-        if ($LASTEXITCODE -eq 0) { return }
+        if ($LASTEXITCODE -eq 0) { Save-SourceTag; return }
         Write-Warn "git clone failed; falling back to the source zip"
         if (Test-Path $src) { Move-Item $src ("$src.failed-clone-" + (Get-Stamp)) }
     }
-    $zip = Join-Path $dl "strata-src-$Tag.zip"
-    $tmp = Join-Path $dl ("src-" + [guid]::NewGuid().ToString("N"))
-    if (-not (Test-Path $zip)) { Get-File "https://github.com/sergqwer/strata-nvfp4/archive/refs/tags/$Tag.zip" $zip }
-    Expand-Archive $zip -DestinationPath $tmp
-    $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
-    Move-Item $inner.FullName $src
+    Move-Item (Get-SourceZip) $src
+    Save-SourceTag
 }
 
 # ---- 2. Portable Python inside .venv\Scripts (START-HERE.bat and setup.py use whatever python is there) ----
@@ -227,7 +275,7 @@ function Find-StrataConfig {
 
 function Install-Model {
     $contextKey = if ($Context -gt 0) { "$Context" } else { "auto" }
-    $want = "$Family|$Model|$contextKey|$Vision"
+    $want = "$Tag|$Family|$Model|$contextKey|$Vision"   # a new Strata version re-runs setup for its engine
     $label = if ($Model) { "$Family $Model" } else { $Family }
     $info = Read-Marker
     if (-not $Reinstall -and $info -and (Find-StrataConfig)) {
@@ -274,6 +322,9 @@ function Update-StrataConfig($config) {
                   "--set-str", "host=127.0.0.1",       # Strata stays private; the gateway is the LAN face
                   "--set", "fit_max_tokens=true")       # clamp oversized max_tokens instead of HTTP 400
     if ($UpstreamKey) { $toolArgs += @("--set-str", "api_key=$UpstreamKey") } else { $toolArgs += @("--unset", "api_key") }
+    # From Strata 0.2 the server applies the model card's sampling per thinking state; a "sampling"
+    # block left by a 0.1 install would still win, so drop it (Strata's own upgrade note says so).
+    if ($Tag -notmatch '^v0\.1\.') { $toolArgs += @("--unset", "sampling") }
     if ($info -and $info.root -and $info.root -ne $root) {
         Write-Step "Folder moved from $($info.root); updating paths in $($config.Name)"
         $toolArgs += @("--move", $info.root, $root)
@@ -316,7 +367,8 @@ Update-StrataConfig $config
 if ($SetupOnly) { Write-Step "Setup complete. Run START.bat to start."; return }
 
 function Q($v) { '"' + $v + '"' }
-Write-Step "Starting Strata with $($config.Name) (model load can take several minutes)"
+Write-Step "Starting Strata $Tag with $($config.Name) (model load can take several minutes)"
+$env:STRATA_NO_ACQUIRE = "1"   # serving never downloads or installs (Strata's own guard)
 $strata = Start-Process -FilePath $python -ArgumentList @("serve\server.py", "--engine", "strata", "--config", (Q $config.Name), "--port", $UpstreamPort) -WorkingDirectory $src -PassThru -NoNewWindow
 $null = $strata.Handle   # cache the handle so ExitCode is readable after exit
 

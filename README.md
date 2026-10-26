@@ -24,7 +24,7 @@ START.bat
 
 | 步驟 | 已存在 | 不存在 |
 |---|---|---|
-| 1. Strata 原始碼 `strata-nvfp4\` | 略過 | 有 git 就 clone，沒有就下載 zip（釘在 `v0.1.44.1-nvfp4.2`） |
+| 1. Strata 原始碼 `strata-nvfp4\` | 版本相同就略過；`-Tag` 不同就原地更新（模型保留） | 有 git 就 clone，沒有就下載 zip（釘在 `v0.2.0-beta-nvfp4.3`） |
 | 2. 可攜 Python `strata-nvfp4\.venv\Scripts\` | 略過 | 下載 python.org 嵌入式 3.12.10 與 pip（不需安裝、不寫登錄檔） |
 | 3. 引擎＋模型 `Strata-data\` | 略過（看 `portable_state\installed.json`） | 交給 Strata 自己的下載器（預設約 90 GB，中斷後再按一次 START.bat 會續傳） |
 | 4. 啟動 | Strata（`127.0.0.1:8080`）＋閘道（`<內網IP>:8000`、`127.0.0.1:8000`） | |
@@ -130,12 +130,12 @@ model_auto_compact_token_limit = 110000
 |---|---|---|
 | 模型 | `qwen` 家族、`IQ3_S` 大小（`-Family`、`-Model` 可改） | ISTA-DASLab 的 GSQ-RCO 量化（3.5-bit），下載 83.6 GB，另加 Strata 抓的 MTP 草稿層約 5 GB。執行時約 52 GiB RAM，**能整個放進 64 GB RAM**，不必進低 RAM 模式讀 SSD；Strata 也把它列為 64 GB 電腦的預設，但要求「其他程式少開」。精度與速度的取捨見下表。 |
 | Context | **131072（128K）**（`-Context` 可改；`-Context 0` 交給 Strata 依顯存決定） | Codex 這類代理客戶端光是系統提示詞加工具定義就很大，64K 很快就會超過上限（Strata 會回 400，不會偷偷截斷）。Strata 對 16 GB 卡建議 64K；128K 的代價是 KV cache 會隨對話變長才在顯存裡長大，短對話不受影響，對話很長時能放在顯卡上的專家會變少、速度略降。搭配 Codex 的設定見下方「搭配 Codex」。 |
-| 取樣預設 | Strata 依家族寫入 `temperature 1.0 / top_p 0.95 / top_k 20` | 已對照 Qwen3.8-Flash-Next 官方 `generation_config.json`，數值一致。只套用在請求沒帶的欄位，請求自帶的值優先。閘道預設不改任何取樣欄位。 |
+| 取樣預設 | Strata 依模型卡，按「是否思考」套用 | 思考時是 `temperature 1.0 / top_p 0.95 / top_k 20`，與 Qwen3.8-Flash-Next 官方 `generation_config.json` 一致。只套用在請求沒帶的欄位，請求自帶的值優先。舊版 Strata 寫在設定檔裡的固定取樣區塊會蓋過這個行為，啟動器會依 Strata 的升級說明移除它。閘道預設不改任何取樣欄位。 |
 | `fit_max_tokens` | `true`（本包加的） | Strata 預設在 `max_tokens` 超過剩餘 context 時回 HTTP 400，代理類客戶端常送很大的值。開啟後會夾到剩餘空間，回應的 `finish_reason` 照常標示 `length`。 |
 | `host` | 固定 `127.0.0.1`（本包加的） | Strata 本體不對外，區網一律經閘道與金鑰。 |
 | `api_key` | `-UpstreamKey` 有設才寫入，沒設就移除 | 每次啟動重新套用，換金鑰不用重跑安裝。 |
 | 低 RAM 模式 | Strata 自動判斷 | 低於約 92 GiB RAM 時，部分專家從硬碟讀取。 |
-| 讀圖（Vision） | `yes`（預設開啟） | 額外下載約 0.9 GB 的編碼器，交給 Strata 決定放在哪裡。依 Strata 原始碼：IQ3_S 這類 GGUF 會放在 **GPU**，保留約 1.4 GB 顯存，文字慢幾個百分點；NVFP4 會放在 **CPU**，不佔顯存，每張圖約 2–6 秒，但約佔 1–2 GiB RAM。IQ3_S 在 64 GB 上 RAM 很緊，所以 Strata 這樣分配是合理的。安裝輸出的 `images: on (encoder on the …)` 會顯示實際位置。`-Vision cpu`、`-Vision gpu` 可強制指定，`-Vision no` 關閉。 |
+| 讀圖（Vision） | `yes`（預設開啟） | 額外下載約 0.9 GB 的編碼器，交給 Strata 決定放在哪裡：顯存低於 24 GB 時放在 **CPU**，不佔顯存，顯存全部留給專家快取；每張圖約 2–6 秒，約佔 1–2 GiB RAM。安裝輸出的 `images: on (encoder on the …)` 會顯示實際位置。`-Vision gpu` 可強制放顯卡（約佔 1.4 GB 顯存），`-Vision no` 關閉。 |
 
 標「本包加的」項目，由 `portable\strata_config.py` 在每次啟動時寫入 `strata-*.json`。之所以每次都寫，是因為 Strata 重跑 setup 時會重寫它自己管理的欄位。
 
@@ -181,7 +181,7 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 
 ## 速度
 
-實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，客戶端是 Codex。
+實測：RTX 5070 Ti 16 GB、64 GB RAM、i5-14600K、PCIe 5.0、NVMe，Windows 11，Strata v0.1.44.1-nvfp4.2，客戶端是 Codex。
 
 | 項目 | 預設 IQ3_S | NVIDIA NVFP4（`-Family qwen-nvidia-nvfp4`） |
 |---|---|---|
@@ -192,19 +192,36 @@ python format_probe.py --temps 0.3,0.7,1.0 --trials 5 --verbose
 | 產生文字 | **36.8–45 tok/s** | 暖機後 10.5–12 tok/s |
 | 專家快取命中率 | 80% | 54–63% |
 
-IQ3_S 的數字只量了一輪，NVFP4 的數字是連續約 10 輪的結果。
+IQ3_S 的數字只量了一輪，而且是在 60K token 的長對話中、邊呼叫工具邊量的；NVFP4 的數字是連續約 10 輪的結果。
 
-Strata 文件的參考值：在 RTX 5090 上模擬「16 GB 顯卡＋64 GB RAM、64K context」，暖機後的產生速度是 54–56 tok/s；RAM 92 GiB 以上時是 67 tok/s。參考機的 CPU 是 Ryzen 9 9950X3D（AVX-512）。快取沒命中的專家要在 CPU 上算，所以只支援 AVX2 的 CPU 會比較慢。
+### 跟網路上的數字比較
 
-為什麼會慢、能做什麼：
+公開的 16 GB 顯卡＋64 GB RAM 實測（IQ3_S 或相近量化）：
 
+| 來源 | 系統 | 產生速度 |
+|---|---|---|
+| Strata issue #2453 的社群測試 | Linux、RTX 5070 Ti | 70–95 tok/s（短對話） |
+| note.com 部落格 | Linux、RTX 5070 Ti、IQ3_XXS、128K | 50–70 tok/s |
+| note.com 部落格 | Ubuntu、RTX 5070 Ti、Ryzen 5 9600X、256K | 50–90 tok/s |
+| Strata issue #2453 回報者 | **Windows**、i9-14900K、RTX 5060 Ti 16 GB | 55–69 tok/s（短對話） |
+
+比較時要注意：
+
+- **對話長度：** 對話越長，每個 token 越慢。網路上的數字多半是短提示詞；上表本機的 36.8–45 tok/s 是在 60K token 的對話裡量的。
+- **作業系統：** 公開數字以 Linux 居多。Windows 的 WDDM 驅動會保留一部分顯存給桌面，鎖定記憶體也有限制。
+- **CPU：** 快取沒命中的專家在 CPU 上算。支援 AVX-512 的 CPU（例如 Ryzen 7000/9000 系列）較快；Intel 12 代以後的消費級 CPU 只有 AVX2。
+- **公平比較：** 模型執行中時，在 `strata-nvfp4\` 跑 Strata 附的 `BENCH.bat`，約 10 分鐘會產生一份可分享的報告，跟別人的報告比才有意義。
+
+### 能做什麼
+
+- **用新版 Strata（預設已是 `v0.2.0-beta-nvfp4.3`）。** 官方在 RTX 5090 上實測產生速度 203.3 對 179.5 tok/s（5 組交錯測試，中位數 +8%）。新版也會在顯存低於 24 GB 時把讀圖編碼器放到 CPU，約 1.4 GB 顯存還給專家快取；CPU 工作執行緒改依實體核心設定，混合架構 CPU 用「大核＋一半小核」。
+- **螢幕接主機板的顯示輸出。** 有內建顯示晶片的 CPU（例如 i5-14600K）可以讓桌面改由內顯負責，獨立顯卡不必為桌面保留顯存，能放更多專家。
 - **64 GB 的電腦用預設的 IQ3_S。** 它能整個放進 RAM，不必進低 RAM 模式；以下幾點主要針對 NVFP4。
 - **剛啟動最慢。** 64 GB 的電腦用 NVFP4 時會進入低 RAM 模式：大部分專家第一次用到時才從 SSD 讀進來，再由 Windows 留在 RAM 裡；顯示卡的專家快取也會依實際用到的專家自動調整。多跑幾個請求，速度和命中率都會上升。
 - **跑模型時關掉其他程式（尤其是瀏覽器）。** 低 RAM 模式能留在 RAM 的專家是「可用 RAM 減 6 GiB」，其他程式吃掉的 RAM 都會變成 SSD 讀取。
 - **代理類客戶端（如 Codex）第一輪特別慢。** 它們每次都會送上萬 token 的系統提示詞和工具定義。Strata 會在每一輪結束時記下檢查點，同一段對話的下一輪只讀新增的 token，所以只有第一輪要付完整的讀取時間。
 - **不需要讀圖時可用 `-Vision no`。** 圖片編碼器放在 GPU 時佔約 1.4 GB 顯存，放在 CPU 時佔 1–2 GiB RAM；關掉可以把這些空間還給專家。
 - **加 RAM 效果最大。** 92 GiB 以上時，所有專家都常駐 RAM，不再讀 SSD。
-- **自己量測：** 模型執行中時，在 `strata-nvfp4\` 跑 Strata 附的 `BENCH.bat`，約 10 分鐘會產生一份可分享的報告。
 
 ## 與網路上流傳的部署教學的差異
 
@@ -238,11 +255,12 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 - **安裝：** 可攜 Python 與 pip、setup.py 參數全部被接受且不會停下來詢問、git clone 路線。
 - **下載：** 引擎、模型、圖片編碼器全部下載完成並通過 SHA-256 驗證。
 - **分頁檔：** 設為固定 65536 MB 並重開機後，啟動器的檢查顯示 `65536 MB fixed`，Strata 的警告也消失。
-- **執行：** IQ3_S 與 NVIDIA NVFP4 都能載入，經閘道使用 `/v1/responses` 推理與工具呼叫，Strata 套用了設定檔的官方取樣預設。
+- **執行（Strata v0.1.44.1-nvfp4.2）：** IQ3_S 與 NVIDIA NVFP4 都能載入，經閘道使用 `/v1/responses` 推理與工具呼叫，Strata 套用了官方取樣預設。
 - **超過 context：** Strata 回 400 而不截斷；這就是預設用 128K、並在「搭配 Codex」寫明壓縮設定的原因。
 
 **未驗證（尚未在有 GPU 的真機上跑過，歡迎回報）：**
 
+- 預設的 Strata `v0.2.0-beta-nvfp4.3` 在真機上的升級、安裝與速度。已對照它的原始碼確認：啟動器用到的安裝參數都還在，伺服器仍以 `serve/server.py --engine strata --config … --port …` 啟動。
 - 實際傳圖片給模型讀圖。
 - 啟動器自動安裝 `jsonschema`，以及之後 `json_schema` 的完整檢查。
 - `set_pagefile.ps1` 實際寫入登錄檔：寫入格式與 Windows「虛擬記憶體」對話框相同，但只測過 dry run。
@@ -253,7 +271,7 @@ Strata 的 `START-HERE.bat` 只要看到 `.venv\Scripts\python.exe` 存在就直
 - **回覆全是 `!`**：Strata README 有專門章節，通常與 RAM／分頁檔或驅動有關，請依該章節處理。
 - **啟動很久沒回應**：首次載入與 low-RAM 模式都慢，看 Strata 視窗輸出；`/health` 503 屬正常。
 - **下載中斷**：再按一次 `START.bat`，已完成的步驟會略過，模型會續傳。
-- **更新 Strata**：如果原始碼是用 git clone 取得的，跑 `strata-nvfp4\UPDATE.bat` 即可，模型會保留。如果是 zip 取得的（沒有 `.git`），把 `strata-nvfp4\` 改名（例如 `strata-nvfp4.old`），再用 `.\START.bat -Tag <新版本標籤>` 啟動。這樣只會重新下載原始碼、Python 與引擎（約 0.5 GB），模型在 `Strata-data\` 裡會保留。
+- **換 Strata 版本**：`.\START.bat -Tag <版本標籤>`。啟動器會記住已安裝的版本，標籤不同就原地更新：git 安裝用 git 切換，zip 安裝則換成新版資料夾、保留可攜 Python，舊資料夾改名留著。接著重跑一次 Strata 安裝更新引擎（約 0.5 GB）。模型在 `Strata-data\` 裡，不會重新下載。
 - **Linux**：Strata 支援 Linux（`./setup.sh`），但本包的啟動器只寫了 Windows 版。
 
 ## 授權
